@@ -6,8 +6,9 @@ import (
 
 func main() {
 	defer sxcrawler.Done()
-	_, err := sxcrawler.Login("账号", "密码")
+	rg, err := sxcrawler.Login("", "")
 	if err != nil {
 		panic(err)
 	}
+	rg.GetScore()
 }

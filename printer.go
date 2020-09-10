@@ -22,7 +22,7 @@ const (
 // PrintResponse 打印响应信息
 func PrintResponse(response *http.Response, charset encoding) {
 	//HTTP/1.1 302 Found
-	fmt.Printf("%s %d %s\r\n", response.Proto, response.StatusCode, response.Status)
+	fmt.Printf("%s %s\r\n", response.Proto, response.Status)
 	printHeader(response.Header)
 	switch charset {
 	case UTF8:
@@ -58,6 +58,9 @@ func printlnCookie(cookies []*http.Cookie) {
 }
 
 func printBody(body io.ReadCloser) {
+	if body == nil {
+		return
+	}
 	defer body.Close()
 	sb := readBody(body)
 	if sb == nil {
@@ -67,6 +70,9 @@ func printBody(body io.ReadCloser) {
 }
 
 func printBodyGBK(body io.ReadCloser) {
+	if body == nil {
+		return
+	}
 	reader, err := charset.NewReaderLabel("GBK", body)
 	if err != nil {
 		panic(err)
