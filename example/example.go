@@ -10,5 +10,5 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	rg.GetScore()
+	rg.GetAllCourseInfo()
 }

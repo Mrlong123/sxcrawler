@@ -15,7 +15,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
@@ -91,7 +90,8 @@ type semester struct {
 	gainCredit float32
 	// 重修学分
 	retakeCredit float32
-	scores       []*course
+	// 每学期的课程
+	courses []*course
 }
 
 type course struct {
@@ -151,6 +151,10 @@ func (rg *RequestGeneral) addCookie(cookies []*http.Cookie) {
 //addHeader 添加Header
 func (rg *RequestGeneral) addHeader(key string, value string) {
 	rg.headers[key] = value
+}
+
+func (rg *RequestGeneral) getHeader(key string) string {
+	return rg.headers[key]
 }
 
 func (rg *RequestGeneral) setReferer(value string) {
@@ -243,6 +247,15 @@ func newLoginForm(username string, password string, checkcode string) *loginForm
 	}
 }
 
+func newScoreForm(viewstate string, xn string, xq string, button string) *scoreForm {
+	return &scoreForm{
+		__VIEWSTATE: viewstate,
+		ddlXN:       xn,
+		ddlXQ:       xq,
+		Button1:     button,
+	}
+}
+
 //Login ... 程序入口
 func Login(username string, password string) (*RequestGeneral, error) {
 	fmt.Println("请注意不同IDE Console接收键盘输入问题O(∩_∩)O")
@@ -300,6 +313,14 @@ func inputCheckCode(reqGeneral *RequestGeneral) string {
 			fmt.Print("请输入验证码(回车结束):")
 			fmt.Scanln(&checkcode)
 		}
+		// for len(checkcode) < 4 {
+		// 	fmt.Print("请输入验证码(回车结束):")
+		// 	bytes, _ := ioutil.ReadFile("code.txt")
+		// 	checkcode = string(bytes)
+		// 	time.Sleep(time.Second * 1)
+		// 	// fmt.Scanln(&checkcode)
+		// }
+		// fmt.Println(checkcode)
 	}
 	return checkcode
 }
@@ -335,8 +356,168 @@ func login(reqGeneral *RequestGeneral, form *loginForm) error {
 	return nil
 }
 
-// GetScore 获取分数
-func (rg *RequestGeneral) GetScore() error {
+// 从html里获取出学生基本信息
+func (si *studentInfo) addBaseInfo(doc *goquery.Document) {
+	// 基本信息栏
+	searchCon := doc.Find("p[class=search_con]")
+	// 获取基本信息
+	si.stuID = strings.Split(searchCon.Find("#Label3").Text(), "：")[1]
+	si.name = strings.Split(searchCon.Find("#Label5").Text(), "：")[1]
+	si.college = strings.Split(searchCon.Find("#Label6").Text(), "：")[1]
+	si.major = searchCon.Find("#Label7").Text()
+	si.grade = strings.Split(searchCon.Find("#Label8").Text(), "：")[1]
+}
+
+// GetAllCourseInfo 获取所有学期的分数
+func (rg *RequestGeneral) GetAllCourseInfo() {
+	fmt.Println("******************************************")
+	fmt.Println("| 整个过程大约耗时3分钟，你可以去接点水来喝 |")
+	fmt.Println("******************************************")
+	/*
+		盲目的请求太慢了 每次10s 至少5分钟
+		现在直接通过当学号计算出需要请求的几个年份 然后固定1，2两个学期 取消没用的第3学期
+		计算 1+4+1年 降级或留级
+	*/
+	joinYear, _ := strconv.Atoi(rg.stu.xh[:4])
+	minYear := joinYear - 1
+	// 最大年限
+	maxYear := joinYear + 4
+	// 学年
+	years := generateRequestXN(minYear, maxYear)
+	studentInfo, err := rg.getCourse(years)
+	if err != nil {
+		panic(err)
+	}
+	fmt.Printf("姓名:%v,学号:%v,学院:%v,专业:%v,班级:%v\n", studentInfo.name, studentInfo.stuID, studentInfo.college, studentInfo.major, studentInfo.grade)
+	for _, smster := range studentInfo.semesters {
+		fmt.Printf("%v学年%v学期，所选学分:%v,所获学分:%v,重修学分%v\n", smster.year, smster.semester, smster.selectedCredit, smster.gainCredit, smster.retakeCredit)
+		for _, course := range smster.courses {
+			fmt.Printf("课程:%v\t学分:%v\t绩点:%v\t成绩:%v\n", course.courseName, course.credit, course.gradePoint, course.score)
+		}
+	}
+}
+
+//GetCourseInfo 获取某几年的课程信息
+func (rg *RequestGeneral) GetCourseInfo(yearStart int, yearEnd int) {
+	fmt.Println("******************************************")
+	fmt.Println("|    整个过程比较耗时，你可以去接点水来喝   |")
+	fmt.Println("******************************************")
+	years := generateRequestXN(yearStart, yearEnd)
+	_, err := rg.getCourse(years)
+	if err != nil {
+		panic(err)
+	}
+}
+
+// 根据年份区间获取信息 并发执行
+func (rg *RequestGeneral) getCourse(years []string) (*studentInfo, error) {
+	// 先前往课程页
+	doc, err := rg.toCoursePage()
+	if err != nil {
+		return nil, err
+	}
+	// 从toCoursePage()里获取跳转信息
+	xscjURL := rg.getHeader("Referer")
+	studentInfo := new(studentInfo)
+	// 获取基本信息
+	studentInfo.addBaseInfo(doc)
+	// 获取表单中viewstate值
+	viewstate, _ := doc.Find("input[name=__VIEWSTATE]").Attr("value")
+	// 获取表单value值(按学期查询)
+	button1, _ := doc.Find("#Button1").Attr("value")
+	// 学期
+	smsters := [...]int{1, 2}
+	// 并发获取每学期信息
+	var wg sync.WaitGroup
+	var mutex sync.Mutex
+	// 每学期的信息
+	semesters := []*semester{}
+	for i := 0; i < len(years); i++ {
+		for j := 0; j < len(smsters); j++ {
+			wg.Add(1)
+			go func(yearIdx int, xqIdx int) {
+				defer wg.Done()
+				//表单 viewstate 学年,学期,button
+				form := newScoreForm(viewstate, years[yearIdx], strconv.Itoa(smsters[xqIdx]), button1)
+				request := rg.newFormRequest("POST", xscjURL, rg.generateForm(form))
+				// 为避免并发线程安全问题 每个协程使用自己的client
+				cli := &http.Client{}
+				response, err := cli.Do(request)
+				if err != nil {
+					panic(err)
+				}
+				doc, err := getUTF8DocumentFromReader(response.Body)
+				if err != nil {
+					panic(err)
+				}
+				fieldset := doc.Find("fieldset").First()
+				// 学分统计
+				perSmster := new(semester)
+				{
+					xftj := fieldset.Find("#xftj").Children().Text()
+					xftjSplit := strings.Split(xftj, "；")
+					// 所修学分 utf8汉子三个字符
+					selectedCredit, _ := strconv.ParseFloat(xftjSplit[0][4*3:], 32)
+					// 没有学分代表该年还没有成绩
+					if selectedCredit-0 < 0.000001 {
+						return
+					}
+					perSmster.selectedCredit = float32(selectedCredit)
+					// 所获学分
+					if len(xftjSplit[1]) > 4 {
+						gainCredit, _ := strconv.ParseFloat(xftjSplit[1][4:], 32)
+						perSmster.gainCredit = float32(gainCredit)
+					}
+					// 重修学分
+					if len(xftjSplit[2]) > 4 {
+						retakeCredit, _ := strconv.ParseFloat(xftjSplit[2][4:], 32)
+						perSmster.retakeCredit = float32(retakeCredit)
+					}
+				}
+				// 学年和学期赋值
+				perSmster.year = years[yearIdx]
+				perSmster.semester = smsters[xqIdx]
+				// 开始遍历获取课程
+				courses := []*course{}
+				div := fieldset.Find("#divShow1")
+				div.Find("table").First().Find("tbody>tr").Each(func(i int, selection *goquery.Selection) {
+					// 表格头 不需要
+					if selection.HasClass("datelisthead") {
+						return
+					}
+					crse := new(course)
+					td := selection.Children()
+					crse.courseCode = goquery.NewDocumentFromNode(td.Get(2)).Text()
+					crse.courseName = goquery.NewDocumentFromNode(td.Get(3)).Text()
+					crse.courseNature = goquery.NewDocumentFromNode(td.Get(4)).Text()
+					crse.belong = goquery.NewDocumentFromNode(td.Get(5)).Text()
+					crse.credit = goquery.NewDocumentFromNode(td.Get(6)).Text()
+					crse.gradePoint = goquery.NewDocumentFromNode(td.Get(7)).Text()
+					crse.score = goquery.NewDocumentFromNode(td.Get(8)).Text()
+					crse.minorMark = goquery.NewDocumentFromNode(td.Get(9)).Text()
+					crse.retestScore = goquery.NewDocumentFromNode(td.Get(10)).Text()
+					crse.retakeScore = goquery.NewDocumentFromNode(td.Get(11)).Text()
+					crse.collegeName = goquery.NewDocumentFromNode(td.Get(12)).Text()
+					crse.remarks = goquery.NewDocumentFromNode(td.Get(13)).Text()
+					crse.retakeMark = goquery.NewDocumentFromNode(td.Get(14)).Text()
+					courses = append(courses, crse)
+				})
+				perSmster.courses = courses
+				// 避免并发带来的数据不一致
+				mutex.Lock()
+				semesters = append(semesters, perSmster)
+				mutex.Unlock()
+			}(i, j)
+		}
+	}
+	wg.Wait()
+	// 赋值
+	studentInfo.semesters = semesters
+	return studentInfo, nil
+}
+
+// 去课程信息页 返回utf8 html解析文档
+func (rg *RequestGeneral) toCoursePage() (*goquery.Document, error) {
 	mainPageURL := fmt.Sprintf("%v/xs_main.aspx?xh=%v", _URL, rg.stu.xh)
 	req := rg.newEmptyBodyRequest("GET", mainPageURL)
 	resp, err := client.Do(req)
@@ -345,7 +526,7 @@ func (rg *RequestGeneral) GetScore() error {
 	}
 	doc, err := getUTF8DocumentFromReader(resp.Body)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	// 获取第5栏 中的子ul中的li的链接
 	uri, _ := getNavLi(doc, 4).Find("li").Last().Children().Attr("href")
@@ -355,141 +536,26 @@ func (rg *RequestGeneral) GetScore() error {
 	resp, err = client.Do(req)
 	if err != nil {
 		// 网站设置防爬手段不加Referer报 302 response missing Location header
-		panic(err)
+		return nil, err
 	}
 	doc, err = getUTF8DocumentFromReader(resp.Body)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	// 基本信息栏
-	searchCon := doc.Find("p[class=search_con]")
-	studentInfo := new(studentInfo)
-	// 获取基本信息
-	studentInfo.stuID = strings.Split(searchCon.Find("#Label3").Text(), "：")[1]
-	studentInfo.name = strings.Split(searchCon.Find("#Label5").Text(), "：")[1]
-	studentInfo.college = strings.Split(searchCon.Find("#Label6").Text(), "：")[1]
-	studentInfo.major = searchCon.Find("#Label7").Text()
-	studentInfo.grade = strings.Split(searchCon.Find("#Label8").Text(), "：")[1]
-	// 获取表单中viewstate值
-	viewstate, _ := doc.Find("input[name=__VIEWSTATE]").Attr("value")
-	// 获取表单value值
-	button1, _ := searchCon.Find("#Button1").Attr("value")
-	// 并发获取每学期信息
-	/*
-		盲目的请求太慢了 每次10s 至少5分钟
-		现在直接通过当学号计算出需要请求的几个年份 然后固定1，2两个学期 取消没用的第3学期
-		计算 1+4+1年 降级或留级
-	*/
-	joinYear, _ := strconv.Atoi(studentInfo.stuID[:4])
-	minYear := joinYear - 1
-	// 最大年限
-	maxYear := joinYear + 4
-	if maxYear > time.Now().Year() {
-		maxYear = time.Now().Year()
+	return doc, nil
+}
+
+// 生成请求的学年区间集合 例如 2016-2017
+func generateRequestXN(yearStart int, yearEnd int) []string {
+	if yearEnd > time.Now().Year()+1 {
+		yearEnd = time.Now().Year() + 1
 	}
 	// 学年
-	years := make([]string, maxYear-minYear)
-	// 学期
-	smsters := [...]int{1, 2}
-	for y := 0; y < maxYear-minYear; y++ {
-		years[y] = fmt.Sprintf("%v-%v", minYear+y, minYear+y+1)
+	years := make([]string, yearEnd-yearStart)
+	for y := 0; y < yearEnd-yearStart; y++ {
+		years[y] = fmt.Sprintf("%v-%v", yearStart+y, yearStart+y+1)
 	}
-	{
-		var wg sync.WaitGroup
-		var idx int32 = 0
-		semesters := make([]*semester, (maxYear-minYear)<<1)
-		for i := 0; i < len(years); i++ {
-			for j := 0; j < len(smsters); j++ {
-				wg.Add(1)
-				go func(yearIdx int, xqIdx int) {
-					defer wg.Done()
-					form := new(scoreForm)
-					form.__VIEWSTATE = viewstate
-					form.Button1 = button1
-					form.ddlXN = years[yearIdx]
-					form.ddlXQ = strconv.Itoa(smsters[xqIdx])
-					reader := rg.generateForm(form)
-					request := rg.newFormRequest("POST", xscjURL, reader)
-					// 为避免并发线程安全问题 每个协程使用自己的client
-					cli := &http.Client{}
-					response, err := cli.Do(request)
-					if err != nil {
-						panic(err)
-					}
-					doc, err := getUTF8DocumentFromReader(response.Body)
-					if err != nil {
-						panic(err)
-					}
-					fieldset := doc.Find("fieldset").First()
-					// 学分统计
-					xftj := fieldset.Find("#xftj").Children().Text()
-					fmt.Println(xftj)
-					xftjSplit := strings.Split(xftj, "；")
-					// 所修学分 utf8汉子三个字符
-					selectedCredit, _ := strconv.ParseFloat(xftjSplit[0][4*3:], 32)
-					// 没有学分
-					if selectedCredit-0 < 0.000001 {
-						return
-					}
-					smster := new(semester)
-					smster.selectedCredit = float32(selectedCredit)
-					// 所获学分
-					if len(xftjSplit[1]) > 4 {
-						gainCredit, _ := strconv.ParseFloat(xftjSplit[1][4:], 32)
-						smster.gainCredit = float32(gainCredit)
-					}
-					// 重修学分
-					if len(xftjSplit[2]) > 4 {
-						retakeCredit, _ := strconv.ParseFloat(xftjSplit[2][4:], 32)
-						smster.retakeCredit = float32(retakeCredit)
-					}
-					// 开始遍历获取学分
-					courses := []*course{}
-					div := fieldset.Find("#divShow1")
-					div.Find("table").First().Find("tbody>tr").Each(func(i int, selection *goquery.Selection) {
-						// 表格头 不需要
-						if selection.HasClass("datelisthead") {
-							return
-						}
-						crse := new(course)
-						td := selection.Children()
-						crse.courseCode = goquery.NewDocumentFromNode(td.Get(2)).Text()
-						crse.courseName = goquery.NewDocumentFromNode(td.Get(3)).Text()
-						crse.courseNature = goquery.NewDocumentFromNode(td.Get(4)).Text()
-						crse.belong = goquery.NewDocumentFromNode(td.Get(5)).Text()
-						crse.credit = goquery.NewDocumentFromNode(td.Get(6)).Text()
-						crse.gradePoint = goquery.NewDocumentFromNode(td.Get(7)).Text()
-						crse.score = goquery.NewDocumentFromNode(td.Get(8)).Text()
-						crse.minorMark = goquery.NewDocumentFromNode(td.Get(9)).Text()
-						crse.retestScore = goquery.NewDocumentFromNode(td.Get(10)).Text()
-						crse.retakeScore = goquery.NewDocumentFromNode(td.Get(11)).Text()
-						crse.collegeName = goquery.NewDocumentFromNode(td.Get(12)).Text()
-						crse.remarks = goquery.NewDocumentFromNode(td.Get(13)).Text()
-						crse.retakeMark = goquery.NewDocumentFromNode(td.Get(14)).Text()
-						courses = append(courses, crse)
-					})
-					for _, v := range courses {
-						fmt.Println(v)
-					}
-					smster.scores = courses
-					//
-					// 原子存储
-					semesters[atomic.LoadInt32(&idx)] = smster
-					atomic.AddInt32(&idx, 1)
-				}(i, j)
-			}
-		}
-		// 赋值
-		studentInfo.semesters = semesters
-		wg.Wait()
-		for _, v := range semesters {
-			for _, v2 := range v.scores {
-				fmt.Println(v2)
-			}
-		}
-
-	}
-	return nil
+	return years
 }
 
 // 将GBK编码的reader转为utf8格式的reader
