@@ -369,7 +369,7 @@ func (si *studentInfo) addBaseInfo(doc *goquery.Document) {
 }
 
 // GetAllCourseInfo 获取所有学期的分数
-func (rg *RequestGeneral) GetAllCourseInfo() {
+func (rg *RequestGeneral) GetAllCourseInfo() *studentInfo {
 	fmt.Println("******************************************")
 	fmt.Println("| 整个过程大约耗时3分钟，你可以去接点水来喝 |")
 	fmt.Println("******************************************")
@@ -392,21 +392,25 @@ func (rg *RequestGeneral) GetAllCourseInfo() {
 	for _, smster := range studentInfo.semesters {
 		fmt.Printf("%v学年%v学期，所选学分:%v,所获学分:%v,重修学分%v\n", smster.year, smster.semester, smster.selectedCredit, smster.gainCredit, smster.retakeCredit)
 		for _, course := range smster.courses {
-			fmt.Printf("课程:%v\t学分:%v\t绩点:%v\t成绩:%v\n", course.courseName, course.credit, course.gradePoint, course.score)
+			if course.courseNature == "必修课" {
+				fmt.Printf("课程:%v\t学分:%v\t绩点:%v\t成绩:%v\n", course.courseName, course.credit, course.gradePoint, course.score)
+			}
 		}
 	}
+	return studentInfo
 }
 
 //GetCourseInfo 获取某几年的课程信息
-func (rg *RequestGeneral) GetCourseInfo(yearStart int, yearEnd int) {
+func (rg *RequestGeneral) GetCourseInfo(yearStart int, yearEnd int) *studentInfo {
 	fmt.Println("******************************************")
 	fmt.Println("|    整个过程比较耗时，你可以去接点水来喝   |")
 	fmt.Println("******************************************")
 	years := generateRequestXN(yearStart, yearEnd)
-	_, err := rg.getCourse(years)
+	stuInfo, err := rg.getCourse(years)
 	if err != nil {
 		panic(err)
 	}
+	return stuInfo
 }
 
 // 根据年份区间获取信息 并发执行
