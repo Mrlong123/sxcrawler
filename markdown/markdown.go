@@ -1,6 +1,5 @@
 package markdown
 
-import ()
 import "strconv"
 import "os"
 import "errors"
@@ -28,7 +27,7 @@ type Handler interface {
 type Markdown struct {
 	filename string
 	buf      *bytes.Buffer
-	hanlders []Handler
+	handlers []Handler
 }
 
 // Table 表格
@@ -53,26 +52,38 @@ type Text struct {
 	line string
 }
 
-// List Ul Ol接口
-type List interface {
-	AppendOne(data string)
+type Sortable interface {
+	Order(buffer *bytes.Buffer)
 }
 
-// Ul 无序列表
-type UnList struct {
-	lies []*Li
+type List struct {
+	//节点
+	li []*Li
+	//排序类型
+	order Sortable
 }
 
-// Ol 有序列表
-type OrderList struct {
-	lies []*Li
-}
-
-// Li 每个小节点
 type Li struct {
-	parent, child  List
-	prevLi, nextLi *Li
-	text           Text
+	//父节点
+	parent *Li
+	//孩子
+	children []*Li
+	//内容
+	text *Text
+}
+
+type UnOrderedList struct {
+}
+
+type OrderedList struct {
+}
+
+func (ul *UnOrderedList) Order(buffer *bytes.Buffer) {
+
+}
+
+func (ol *OrderedList) Order(buffer *bytes.Buffer) {
+
 }
 
 // Block 区块
@@ -119,29 +130,49 @@ func NewTable(row int, col int) *Table {
 	}
 }
 
+func NewOrderedList() *List {
+	return &List{
+		order: new(OrderedList),
+	}
+}
+
+func NewUnOrderedList() *List {
+	return &List{
+		order: new(UnOrderedList),
+	}
+}
+
+func NewLi(data string) *Li {
+	return &Li{
+		text: NewText(data),
+	}
+}
+
 // Join 添加handler到存储链
 func (md *Markdown) Join(handlers ...Handler) *Markdown {
 	for _, handle := range handlers {
-		md.hanlders = append(md.hanlders, handle)
+		md.handlers = append(md.handlers, handle)
 	}
 	return md
 }
 
 // Store 进行存储
-func (md *Markdown) Store() error {
-	for _, handler := range md.hanlders {
+func (md *Markdown) Store() {
+	for _, handler := range md.handlers {
 		err := handler.Build(md.buf)
 		if err != nil {
-			return err
+			panic(err)
 		}
 	}
 	file, err := os.Create(md.filename)
 	if err != nil {
-		return err
+		panic(err)
 	}
 	defer file.Close()
-	_, err = md.buf.WriteTo(file)
-	return err
+	if _, err = md.buf.WriteTo(file); err != nil {
+		panic(err)
+	}
+
 }
 
 // Append 追加文字
@@ -157,21 +188,41 @@ func (title *Title) SetTitle(data string) {
 	title.text.line = data
 }
 
+func (list *List) AppendLi(data string) {
+
+}
+
+func (list *List) AppendList(l *List) {
+
+}
+
 func writeLine(data string, buffer *bytes.Buffer) error {
 	_, err := buffer.WriteString(data + "\r\n")
 	return err
 }
 
+func newLine(buffer *bytes.Buffer) {
+	buffer.WriteString("\r\n")
+}
+
 // Build 写入文本
 func (tt *Text) Build(buf *bytes.Buffer) error {
-	return writeLine(tt.line, buf)
+	if err := writeLine(tt.line, buf); err != nil {
+		return err
+	}
+	newLine(buf)
+	return nil
 }
 
 // Build 写入标题
 func (title *Title) Build(buf *bytes.Buffer) error {
 	orig := title.text.line
 	title.text.line = fmt.Sprintf("%s %s", strings.Repeat("#", int(title.heading)), orig)
-	return title.text.Build(buf)
+	if err := title.text.Build(buf); err != nil {
+		return err
+	}
+	newLine(buf)
+	return nil
 }
 
 // Build 创建表格
@@ -185,7 +236,7 @@ func (table *Table) Build(buf *bytes.Buffer) (err error) {
 	if err != nil {
 		return err
 	}
-	writeLine("|", buf)
+	err = writeLine("|", buf)
 	// 分割线
 	buf.WriteString(strings.Repeat(fmt.Sprintf("| %s ", strings.Repeat("-", table.maxLength)), table.col) + "|\r\n")
 	// 内容
@@ -195,9 +246,10 @@ func (table *Table) Build(buf *bytes.Buffer) (err error) {
 				return err
 			}
 		}
-		writeLine("|", buf)
+		err = writeLine("|", buf)
 	}
-	return nil
+	newLine(buf)
+	return err
 }
 
 // Add 添加到表格得格子中 多了将会返回异常
@@ -233,7 +285,7 @@ func (table *Table) AddIgnoreError(data string) *Table {
 // Update 更新某个格子内容
 func (table *Table) Update(data string, rowIdx int, colIdx int) error {
 	if rowIdx < 0 || rowIdx >= table.row || colIdx < 0 || colIdx >= table.col {
-		return errors.New("The width or length index of the table must be within the specified range of the table")
+		return errors.New("the width or length index of the table must be within the specified range of the table")
 	}
 	if len(data) > table.maxLength {
 		table.maxLength = len(data)

@@ -12,10 +12,6 @@ func TestMarkdown(t *testing.T) {
 	text := markdown.NewText("ssss")
 	md.Join(title, text)
 	table := markdown.NewTable(2, 2)
-	table.Add("1")
-	table.Add("2222222")
-	table.Add("323213132")
-	table.Add("444444")
-	md.Join(table)
-	md.Store()
+	table.AddIgnoreError("1").AddIgnoreError("2222222").AddIgnoreError("3333333").AddIgnoreError("4444444")
+	md.Join(table).Store()
 }
