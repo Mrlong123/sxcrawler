@@ -6,9 +6,9 @@ import (
 
 func main() {
 	defer sxcrawler.Done()
-	rg, err := sxcrawler.Login("", "")
+	rg, err := sxcrawler.Login("学号", "密码")
 	if err != nil {
 		panic(err)
 	}
-	rg.GetAllCourseInfo()
+	rg.GetAllCourseInfo().StoreToMarkdown("信息.md")
 }

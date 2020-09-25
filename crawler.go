@@ -23,106 +23,24 @@ const _URL = "http://jwgl.sanxiau.edu.cn"
 
 var fileName string = "checkcode.gif"
 
+const tips1 string = `
+********************************************
+| 由于教务系统数据库连接缓慢的原因
+| -----------------------------------------
+| 整个过程大约耗时3分钟，你可以去接点水来喝
+*******************************************
+`
+
+const tips2 string = `
+***************************************
+| 
+| 整个过程比较耗时，你可以去上个厕所
+| 
+***************************************
+`
+
 // 发送请求的客户端
 var client *http.Client = new(http.Client)
-
-//RequestGeneral ...
-type RequestGeneral struct {
-	stu     *student
-	cookies []*http.Cookie
-	headers map[string]string
-}
-
-//loginForm 登录表单
-type loginForm struct {
-	// 不知道是啥
-	__VIEWSTATE string
-	// 学号
-	TextBox1 string
-	// 密码
-	TextBox2 string
-	// 验证码
-	TextBox3 string
-	//角色
-	RadioButtonList1 string
-	Button1          string
-}
-
-type student struct {
-	xh       string
-	password string
-}
-
-//成绩查询表单
-type scoreForm struct {
-	__VIEWSTATE string
-	// 学年
-	ddlXN string
-	// 学期
-	ddlXQ string
-	// 安学期查询
-	Button1 string
-}
-
-type studentInfo struct {
-	// 学号
-	stuID string
-	// 姓名
-	name string
-	// 学院
-	college string
-	// 专业
-	major string
-	// 班级
-	grade     string
-	semesters []*semester
-}
-
-// 每学期信息
-type semester struct {
-	// 学年
-	year string
-	// 学期
-	semester int
-	// 所选学分
-	selectedCredit float32
-	// 所获学分
-	gainCredit float32
-	// 重修学分
-	retakeCredit float32
-	// 每学期的课程
-	courses []*course
-}
-
-type course struct {
-
-	// 课程代码
-	courseCode string
-	// 课程名称
-	courseName string
-	// 课程性质
-	courseNature string
-	// 课程归属
-	belong string
-	// 学分
-	credit string
-	// 绩点
-	gradePoint string
-	// 成绩
-	score string
-	// 辅修标记
-	minorMark string
-	// 补考成绩
-	retestScore string
-	// 重修成绩
-	retakeScore string
-	// 学院名称
-	collegeName string
-	// 备注
-	remarks string
-	// 重修标记
-	retakeMark string
-}
 
 func newStudent(xh string, pwd string) *student {
 	return &student{
@@ -313,14 +231,6 @@ func inputCheckCode(reqGeneral *RequestGeneral) string {
 			fmt.Print("请输入验证码(回车结束):")
 			fmt.Scanln(&checkcode)
 		}
-		// for len(checkcode) < 4 {
-		// 	fmt.Print("请输入验证码(回车结束):")
-		// 	bytes, _ := ioutil.ReadFile("code.txt")
-		// 	checkcode = string(bytes)
-		// 	time.Sleep(time.Second * 1)
-		// 	// fmt.Scanln(&checkcode)
-		// }
-		// fmt.Println(checkcode)
 	}
 	return checkcode
 }
@@ -370,9 +280,7 @@ func (si *studentInfo) addBaseInfo(doc *goquery.Document) {
 
 // GetAllCourseInfo 获取所有学期的分数
 func (rg *RequestGeneral) GetAllCourseInfo() *studentInfo {
-	fmt.Println("******************************************")
-	fmt.Println("| 整个过程大约耗时3分钟，你可以去接点水来喝 |")
-	fmt.Println("******************************************")
+	fmt.Print(tips1)
 	/*
 		盲目的请求太慢了 每次10s 至少5分钟
 		现在直接通过当学号计算出需要请求的几个年份 然后固定1，2两个学期 取消没用的第3学期
@@ -388,13 +296,9 @@ func (rg *RequestGeneral) GetAllCourseInfo() *studentInfo {
 	if err != nil {
 		panic(err)
 	}
-	fmt.Printf("姓名:%v,学号:%v,学院:%v,专业:%v,班级:%v\n", studentInfo.name, studentInfo.stuID, studentInfo.college, studentInfo.major, studentInfo.grade)
-	for _, smster := range studentInfo.semesters {
-		fmt.Printf("%v学年%v学期，所选学分:%v,所获学分:%v,重修学分%v\n", smster.year, smster.semester, smster.selectedCredit, smster.gainCredit, smster.retakeCredit)
-		for _, course := range smster.courses {
-			if course.courseNature == "必修课" {
-				fmt.Printf("课程:%v\t学分:%v\t绩点:%v\t成绩:%v\n", course.courseName, course.credit, course.gradePoint, course.score)
-			}
+	for _, sm := range studentInfo.semesters {
+		for _, course := range sm.courses {
+			fmt.Println(*course)
 		}
 	}
 	return studentInfo
@@ -402,9 +306,7 @@ func (rg *RequestGeneral) GetAllCourseInfo() *studentInfo {
 
 //GetCourseInfo 获取某几年的课程信息
 func (rg *RequestGeneral) GetCourseInfo(yearStart int, yearEnd int) *studentInfo {
-	fmt.Println("******************************************")
-	fmt.Println("|    整个过程比较耗时，你可以去接点水来喝   |")
-	fmt.Println("******************************************")
+	fmt.Print(tips2)
 	years := generateRequestXN(yearStart, yearEnd)
 	stuInfo, err := rg.getCourse(years)
 	if err != nil {

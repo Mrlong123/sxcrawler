@@ -2,9 +2,9 @@
 
 > 三院教务管理系统爬虫
 
-编写中...，完成度60%
+完成度95%
 
-功能:爬取你的所有课程信息、四六级成绩存储到Excel或Markdown
+功能:爬取你的所有课程信息、四六级成绩(未实现)存储到Markdown
 
 ## Installation
 
@@ -27,7 +27,8 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	rg.GetAllCourseInfo()
+	rg.GetAllCourseInfo().StoreToMarkdown("信息.md")
 }
+
 ```
 
