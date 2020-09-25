@@ -7,9 +7,11 @@ import "strings"
 import "fmt"
 import "bytes"
 
+// Heading 标题
 type Heading byte
 
 const (
+	// Heading1 一级标题
 	Heading1 Heading = 1 + iota
 	Heading2
 	Heading3
@@ -18,12 +20,19 @@ const (
 	Heading6
 )
 
-// Hanlder 接口用于将内容写入bytes.Buffer
+// Handler 接口用于将内容写入bytes.Buffer
 type Handler interface {
 	// 创建
 	Build(buffer *bytes.Buffer) error
 }
 
+// Sort 可排序接口 golang无法实现类的多态，我只有使用组合的方式来实现两种不同的排序方式
+type Sort interface {
+	// buffer:需要写入的缓存 list:列表数据源 recursiveNum：递归的次数，决定嵌套列表的前缀缩进
+	createSort(buffer *bytes.Buffer, list *List, recursiveNum int) error
+}
+
+// Markdown 整个程序的主体
 type Markdown struct {
 	filename string
 	buf      *bytes.Buffer
@@ -52,39 +61,31 @@ type Text struct {
 	line string
 }
 
-type Sortable interface {
-	Order(buffer *bytes.Buffer)
-}
-
+// List 列表
 type List struct {
-	//节点
-	li []*Li
+	// 头节点
+	head *Li
+	//尾节点
+	tail *Li
 	//排序类型
-	order Sortable
+	sorter Sort
 }
 
+// Li 列表里面的元素
 type Li struct {
-	//父节点
-	parent *Li
-	//孩子
-	children []*Li
+	//孩子列表
+	child *List
+	// 下一个
+	next *Li
 	//内容
 	text *Text
 }
 
-type UnOrderedList struct {
-}
+// UnOrderedList 无序列表
+type UnOrderedList struct{}
 
-type OrderedList struct {
-}
-
-func (ul *UnOrderedList) Order(buffer *bytes.Buffer) {
-
-}
-
-func (ol *OrderedList) Order(buffer *bytes.Buffer) {
-
-}
+// OrderedList 有序列表
+type OrderedList struct{}
 
 // Block 区块
 type Block struct {
@@ -95,6 +96,12 @@ type Block struct {
 type Code struct {
 	language string
 	code     *Text
+}
+
+// Link 链接
+type Link struct {
+	description string
+	link        string
 }
 
 // New 创建新的markdown文档
@@ -130,21 +137,54 @@ func NewTable(row int, col int) *Table {
 	}
 }
 
+// NewOrderedList 创建一个空的有序列表 ol
 func NewOrderedList() *List {
 	return &List{
-		order: new(OrderedList),
+		sorter: new(OrderedList),
 	}
 }
 
+// NewUnOrderedList 创建一个空的无序列表 ul
 func NewUnOrderedList() *List {
 	return &List{
-		order: new(UnOrderedList),
+		sorter: new(UnOrderedList),
 	}
 }
 
+// NewLi 创建一个li
 func NewLi(data string) *Li {
 	return &Li{
 		text: NewText(data),
+	}
+}
+
+// NewBlock 创建一个区块
+func NewBlock(data string) *Block {
+	return &Block{
+		text: NewText(data),
+	}
+}
+
+// NewCode 创建一个空的代码块
+func NewCode(language string) *Code {
+	return &Code{
+		language: language,
+	}
+}
+
+// NewCodeWithCodeBlock 创建一个携带代码的代码块
+func NewCodeWithCodeBlock(language string, code string) *Code {
+	return &Code{
+		language: language,
+		code:     NewText(code),
+	}
+}
+
+// NewLink 创建一个新的链接
+func NewLink(description string, link string) *Link {
+	return &Link{
+		description: description,
+		link:        link,
 	}
 }
 
@@ -188,12 +228,28 @@ func (title *Title) SetTitle(data string) {
 	title.text.line = data
 }
 
-func (list *List) AppendLi(data string) {
-
+// AppendNewLi 添加一个新的Li到list的尾部
+func (list *List) AppendNewLi(data string) *Li {
+	li := NewLi(data)
+	// 如果头节点为空 同时代表整个list为空 所以需要同时把li挂到head和tail上
+	if list.head == nil {
+		list.head = li
+		list.tail = li
+	} else {
+		list.tail.next = li
+		list.tail = li
+	}
+	return li
 }
 
-func (list *List) AppendList(l *List) {
+// AppendNewList 添加List到某一个Li上
+func (li *Li) AppendNewList(list *List) {
+	li.child = list
+}
 
+// AppendNewList 讲新的list添加到目标list的尾节点上
+func (list *List) AppendNewList(l *List) {
+	list.tail.AppendNewList(l)
 }
 
 func writeLine(data string, buffer *bytes.Buffer) error {
@@ -252,6 +308,80 @@ func (table *Table) Build(buf *bytes.Buffer) (err error) {
 	return err
 }
 
+// Build 创建list
+func (list *List) Build(buf *bytes.Buffer) (err error) {
+	return list.sorter.createSort(buf, list, 0)
+}
+
+// Build 创建block
+func (bk *Block) Build(buf *bytes.Buffer) (err error) {
+	err = writeLine(fmt.Sprintf("> %s", bk.text.line), buf)
+	newLine(buf)
+	return err
+}
+
+// Build 创建代码块
+func (c *Code) Build(buf *bytes.Buffer) (err error) {
+	_, err = buf.WriteString(fmt.Sprintf("```%s\r\n%s\r\n```\r\n", c.language, c.code))
+	if err != nil {
+		return err
+	}
+	newLine(buf)
+	return nil
+}
+
+// Build 创建链接
+func (lk *Link) Build(buf *bytes.Buffer) (err error) {
+	res := lk.generateLink()
+	_, err = buf.WriteString(res + "\r\n")
+	if err != nil {
+		return err
+	}
+	newLine(buf)
+	return nil
+}
+
+// build 无须列表排序
+func (ul *UnOrderedList) createSort(buffer *bytes.Buffer, list *List, recursiveNum int) (err error) {
+	node := list.head
+	for node != nil {
+		_, err = buffer.WriteString(fmt.Sprintf("%s* %s\r\n", strings.Repeat(" ", recursiveNum*3), node.text.line))
+		if err != nil {
+			return err
+		}
+		child := node.child
+		if node.child != nil {
+			// 递归排序孩子列表
+			child.sorter.createSort(buffer, child, recursiveNum+1)
+		}
+		node = node.next
+	}
+	newLine(buffer)
+	return nil
+}
+
+// build 有序列表排序
+func (ol *OrderedList) createSort(buffer *bytes.Buffer, list *List, recursiveNum int) (err error) {
+	node := list.head
+	index := 1
+	for node != nil {
+		_, err = buffer.WriteString(fmt.Sprintf("%s%d. %s\r\n", strings.Repeat(" ", recursiveNum*3), index, node.text.line))
+		if err != nil {
+			return err
+		}
+		child := node.child
+		if node.child != nil {
+			// 递归排序孩子列表
+			child.sorter.createSort(buffer, child, recursiveNum+1)
+		}
+		// 下标加1
+		index++
+		node = node.next
+	}
+	newLine(buffer)
+	return nil
+}
+
 // Add 添加到表格得格子中 多了将会返回异常
 func (table *Table) Add(data string) error {
 	length := table.row * table.col
@@ -292,4 +422,27 @@ func (table *Table) Update(data string, rowIdx int, colIdx int) error {
 	}
 	table.texts[rowIdx*table.row+colIdx].line = data
 	return nil
+}
+
+// SetCode 设置代码
+func (c *Code) SetCode(code string) {
+	c.code = NewText(code)
+}
+
+// AppendCode 添加代码块 会自动换行
+func (c *Code) AppendCode(code string) {
+	if c.code == nil {
+		c.code = NewText(code)
+	} else {
+		c.code.line += "\r\n" + code
+	}
+}
+
+func (lk *Link) generateLink() string {
+	return fmt.Sprintf("[%s](%s)", lk.description, lk.link)
+}
+
+// String 返回链接的markdown格式
+func (lk *Link) String() string {
+	return lk.generateLink()
 }
