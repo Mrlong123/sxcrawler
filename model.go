@@ -100,3 +100,23 @@ type course struct {
 	// 重修标记
 	retakeMark string
 }
+
+type semesterSlice []*semester
+
+// Len 重写sort包Interface接口里的方法
+func (sms semesterSlice) Len() int {
+	return len(sms)
+}
+
+// Swap 重写交换方法
+func (sms semesterSlice) Swap(i, j int) {
+	sms[i], sms[j] = sms[j], sms[i]
+}
+
+// Less 从小到大排序 规则：按学年+学期 从小到大排序
+func (sms semesterSlice) Less(i, j int) bool {
+	if sms[i].year == sms[j].year {
+		return sms[i].semester < sms[j].semester
+	}
+	return sms[i].year < sms[j].year
+}

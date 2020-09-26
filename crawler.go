@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"reflect"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -24,7 +25,7 @@ const _URL = "http://jwgl.sanxiau.edu.cn"
 var fileName string = "checkcode.gif"
 
 const tips1 string = `
-********************************************
+*******************************************
 | 由于教务系统数据库连接缓慢的原因
 | -----------------------------------------
 | 整个过程大约耗时3分钟，你可以去接点水来喝
@@ -231,6 +232,12 @@ func inputCheckCode(reqGeneral *RequestGeneral) string {
 			fmt.Print("请输入验证码(回车结束):")
 			fmt.Scanln(&checkcode)
 		}
+		// //debug用
+		// for len(checkcode) < 4 {
+		// 	b, _ := ioutil.ReadFile("1.txt")
+		// 	checkcode = string(b)
+		// 	time.Sleep(time.Second * 1)
+		// }
 	}
 	return checkcode
 }
@@ -296,11 +303,8 @@ func (rg *RequestGeneral) GetAllCourseInfo() *studentInfo {
 	if err != nil {
 		panic(err)
 	}
-	for _, sm := range studentInfo.semesters {
-		for _, course := range sm.courses {
-			fmt.Println(*course)
-		}
-	}
+	// 将学年学期由小到大排序
+	sort.Sort(semesterSlice(studentInfo.semesters))
 	return studentInfo
 }
 
@@ -346,8 +350,8 @@ func (rg *RequestGeneral) getCourse(years []string) (*studentInfo, error) {
 				//表单 viewstate 学年,学期,button
 				form := newScoreForm(viewstate, years[yearIdx], strconv.Itoa(smsters[xqIdx]), button1)
 				request := rg.newFormRequest("POST", xscjURL, rg.generateForm(form))
-				// 为避免并发线程安全问题 每个协程使用自己的client
-				cli := &http.Client{}
+				// 为避免并发线程可能会发生的安全问题 每个协程使用自己的client
+				cli := new(http.Client)
 				response, err := cli.Do(request)
 				if err != nil {
 					panic(err)
